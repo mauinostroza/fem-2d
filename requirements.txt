@@ -1,0 +1,14 @@
+# solidspy==1.1.0.post1 se instala aparte con --no-deps (ver README):
+# su setup.py declara meshio==3.0 aunque en realidad no importa meshio en
+# ningún módulo; ese pin es obsoleto y choca con la versión de meshio que
+# necesita pygmsh. install.sh / README documentan el orden correcto.
+numpy>=1.24,<2.0
+scipy>=1.10,<2.0
+easygui>=0.98,<1.0
+pygmsh==7.1.17
+gmsh>=4.11,<5.0
+meshio>=5.3,<6.0
+matplotlib>=3.7,<4.0
+pandas>=2.0,<3.0
+streamlit>=1.32,<2.0
+pytest>=7.4,<9.0
