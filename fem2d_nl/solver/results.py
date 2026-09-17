@@ -12,6 +12,12 @@ class StepResult:
     states: list                    # estado por grupo, ya hecho permanente
     iterations: int
     residual_norm: float
+    f_int: np.ndarray               # (ndof,) fuerzas internas en el u convergido
+    """Ya calculado al converger el paso: evita tener que volver a llamar
+    `assemble()` fuera del solver para leer reacciones/fuerzas (una nueva
+    llamada, con un estado que ya no es "de prueba", puede en principio
+    disparar una perturbación de diferencias finitas distinta y fallar en
+    un material con return mapping propio, p. ej. `concrete_cdp`)."""
 
 
 @dataclass

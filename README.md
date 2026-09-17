@@ -127,13 +127,40 @@ Avance hasta ahora (ver `tests/nl/`):
   decisivo de la geometría de la superficie de fluencia. Ver
   `tests/nl/test_concrete_cdp.py` para el detalle y las limitaciones
   conocidas (abajo).
+- CDP integrado en el elemento Q4 real, a través del solver completo
+  (no solo a nivel de punto material): converge en tracción (ablanda
+  sustancialmente tras el pico) y en compresión (pico dentro del 15% de
+  f'cm) en casos de deformación moderada. Robustez del solver: line
+  search (backtracking) dentro de cada iteración, recuperación
+  adaptativa del tamaño de paso tras un recorte (antes, un solo recorte
+  dejaba el solver atascado en pasos microscópicos para siempre), y un
+  fallo de convergencia del return mapping local ya no hace crashear el
+  solver global — se trata como cualquier otro fallo de iteración y
+  dispara un recorte de paso. Ver `tests/nl/test_concrete_q4_integration.py`.
 
-Pendiente: integrar el CDP dentro del elemento Q4 (hoy solo corre a
-nivel de punto material, con su propio return mapping pero sin la
-regularización crack-band ni la robustez de solver que necesita para
-mallas reales), la malla de sección con barras embebidas, y la interfaz
-de usuario. El plan completo (formulación, arquitectura, riesgos) está
-en el historial de la sesión de desarrollo, no versionado en el repo.
+Pendiente: la malla de sección con barras embebidas, y la interfaz de
+usuario. El plan completo (formulación, arquitectura, riesgos) está en
+el historial de la sesión de desarrollo, no versionado en el repo.
+
+**Alcance honesto de lo que NO se logró en la sesión S4** (se intentó y
+se descartó, en vez de forzar un test que pasara sin decir la verdad):
+un test cuantitativo de "objetividad de malla" (comparar la energía
+disipada entre mallas con distinto refinamiento, o contra la energía de
+fractura analítica G_F·área). Se encontraron dos problemas reales:
+(1) una barra perfectamente uniforme sin imperfección no tiene un
+patrón de localización bien definido — es el error clásico de este tipo
+de test, ya documentado en la literatura de crack-band, y hace falta
+una imperfección explícita para forzar la localización; (2) el área
+bajo la curva carga-desplazamiento GLOBAL incluye energía elástica
+recuperable del resto de la estructura, no solo la energía disipada por
+la fisura, así que compararla contra G_F·área no es válido sin antes
+extraer la energía disipada de las variables de estado del material
+(pendiente, más apropiado para `postprocess.py` en la sesión S5).
+Empujar cualquier malla a daño casi totalmente saturado además es
+numéricamente muy exigente incluso con line search y cutback (matriz
+tangente casi singular) y probablemente necesite arc-length (sesión S7,
+no implementada). Quien continúe este trabajo debería tratar la
+objetividad de malla como un ítem abierto, no como algo ya verificado.
 
 **Avisos de honestidad técnica (no ocultar antes de usar en producción)**:
 
