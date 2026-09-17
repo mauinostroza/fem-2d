@@ -53,7 +53,7 @@ def _structured_quad_grid(length, height, nx, ny):
 def _solve_nl_uniaxial_tension():
     nodes, quads = _structured_quad_grid(LENGTH, HEIGHT, nx=10, ny=6)
     material = ElasticPlaneStress(young_modulus=YOUNG, poisson_ratio=POISSON)
-    group = ElementGroup(kind="quad4", connectivity=quads, material=material, thickness=1.0)
+    group = ElementGroup(kind="quad4", connectivity=quads, material=material, elem_kwargs={"thickness": 1.0})
     model = Model(nodes=nodes, groups=[group])
 
     left = np.nonzero(np.isclose(nodes[:, 0], 0.0))[0]

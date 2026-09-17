@@ -13,10 +13,10 @@ import numpy as np
 
 from fem2d_nl.elements import quad4
 
-ElementKind = Literal["quad4"]
+ElementKind = Literal["quad4", "truss2", "bond_link"]
 
-_N_GAUSS_BY_KIND = {"quad4": quad4.N_GAUSS}
-_N_NODES_BY_KIND = {"quad4": 4}
+_N_GAUSS_BY_KIND = {"quad4": quad4.N_GAUSS, "truss2": 1, "bond_link": 1}
+_N_NODES_BY_KIND = {"quad4": 4, "truss2": 2, "bond_link": 2}
 
 
 @dataclass
@@ -24,7 +24,12 @@ class ElementGroup:
     kind: ElementKind
     connectivity: np.ndarray  # (ne, n_nodes_por_elemento), índices 0-based en Model.nodes
     material: object  # implementa initial_state(n)/integrate(strain,state,dt)
-    thickness: float = 1.0
+    elem_kwargs: dict = field(default_factory=dict)
+    """Parámetros geométricos por elemento, específicos del tipo de
+    elemento: `thickness` (quad4), `area` (truss2), `perimeter`/
+    `trib_length`/`k_normal`/`axis` (bond_link). Cada valor puede ser un
+    escalar (igual para todo el grupo) o un array (ne, ...) para variarlo
+    por elemento (p. ej. distintos diámetros de barra en un mismo grupo)."""
 
     @property
     def n_elements(self) -> int:

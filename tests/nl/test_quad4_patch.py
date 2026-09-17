@@ -53,7 +53,7 @@ def _linear_field(coords, a):
 )
 def test_q4_reproduces_linear_displacement_field_exactly(a):
     material = ElasticPlaneStress(young_modulus=200_000.0, poisson_ratio=0.3)
-    group = ElementGroup(kind="quad4", connectivity=QUADS, material=material, thickness=1.0)
+    group = ElementGroup(kind="quad4", connectivity=QUADS, material=material, elem_kwargs={"thickness": 1.0})
     model = Model(nodes=NODES, groups=[group])
 
     ux, uy = _linear_field(NODES[BOUNDARY_NODES], a)

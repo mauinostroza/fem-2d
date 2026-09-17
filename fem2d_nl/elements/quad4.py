@@ -62,7 +62,7 @@ def gauss_point_coords(coords: np.ndarray) -> np.ndarray:
     return out
 
 
-def element_response(coords, u_e, material, state, thickness, dt):
+def element_response(coords, u_e, material, state, dt, thickness=1.0):
     """Respuesta de un elemento Q4.
 
     coords: (4,2) coordenadas nodales

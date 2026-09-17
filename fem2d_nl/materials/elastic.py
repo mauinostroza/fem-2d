@@ -48,3 +48,21 @@ class ElasticPlaneStress:
         stress = strain @ d_mat.T
         tangent = np.broadcast_to(d_mat, (strain.shape[0], 3, 3)).copy()
         return stress, tangent, state
+
+
+@dataclass(frozen=True)
+class ElasticUniaxial:
+    """Material 1D elástico lineal, para `elements.truss2` (mismo contrato
+    escalar que `steel_uniaxial.MultilinearSteel`: útil como placeholder
+    antes de que el acero entre en fluencia, o en pruebas donde solo se
+    quiere aislar la no linealidad de otro componente, p. ej. adherencia)."""
+
+    young_modulus: float
+
+    def initial_state(self, n_points: int) -> dict:
+        return {}
+
+    def integrate(self, strain: np.ndarray, state: dict, dt: float):
+        stress = self.young_modulus * strain
+        tangent = np.full_like(strain, self.young_modulus)
+        return stress, tangent, state

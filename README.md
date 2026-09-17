@@ -95,3 +95,38 @@ fem2d/
 └── visualization.py           # gráficos matplotlib
 tests/                         # pytest, sin dependencia de la UI
 ```
+
+## En desarrollo: modo no lineal (hormigón armado)
+
+Hay un segundo motor de cálculo, `fem2d_nl/`, en construcción para un
+modo de análisis nuevo (sección/elemento de hormigón armado con no
+linealidad de material) que todavía no está conectado a la interfaz. Es
+independiente del módulo lineal de arriba: solver Newton-Raphson propio
+(SolidsPy no sirve para esto), con su propio elemento continuo (Q4).
+
+Avance hasta ahora (ver `tests/nl/`):
+
+- Infraestructura no lineal: elemento Q4, ensamblaje, condiciones de
+  borde, control de carga/desplazamiento, solver Newton-Raphson con
+  cutback — validada con un patch test y contra el módulo lineal
+  existente en régimen elástico.
+- Barras de refuerzo (`elements/truss2.py`) con acero de plasticidad
+  multilineal (`materials/steel_uniaxial.py`, endurecimiento isótropo,
+  retorno cerrado sin iteración).
+- Adherencia acero-hormigón (`elements/bond_link.py` +
+  `materials/bond_mc2010.py`, ley τ-s del fib Model Code 2010),
+  validada con un ensayo de arrancamiento (pull-out) completo contra
+  la solución independiente de la EDO de adherencia
+  (`scipy.integrate.solve_bvp`).
+
+Pendiente: el modelo de daño-plasticidad del hormigón (Concrete Damaged
+Plasticity), la malla de sección con barras embebidas, y la interfaz de
+usuario. El plan completo (formulación, arquitectura, riesgos) está en
+el historial de la sesión de desarrollo, no versionado en el repo.
+
+**Aviso**: algunos valores numéricos por defecto de la ley de
+adherencia (`materials/bond_mc2010.py`, Tabla 6.1-1 del fib Model Code
+2010) no pudieron verificarse contra el texto oficial del código
+durante el desarrollo (documentado en el docstring del módulo); la
+forma de la curva es correcta, pero cotejar esos números antes de usar
+el módulo en un cálculo de producción.
