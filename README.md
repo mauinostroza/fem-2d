@@ -118,15 +118,44 @@ Avance hasta ahora (ver `tests/nl/`):
   validada con un ensayo de arrancamiento (pull-out) completo contra
   la solución independiente de la EDO de adherencia
   (`scipy.integrate.solve_bvp`).
+- Modelo de daño-plasticidad del hormigón, Concrete Damaged Plasticity
+  tipo Abaqus (`materials/concrete_cdp.py`, Lubliner 1989 / Lee &
+  Fenves 1998), con return mapping en espacio de esfuerzo principal.
+  Validado a nivel de punto material (sin FEM todavía): la envolvente
+  biaxial reproduce fb0/fc0=1.16 y el pico de compresión uniaxial
+  reproduce f'cm, ambos dentro del 2% — el chequeo más limpio y
+  decisivo de la geometría de la superficie de fluencia. Ver
+  `tests/nl/test_concrete_cdp.py` para el detalle y las limitaciones
+  conocidas (abajo).
 
-Pendiente: el modelo de daño-plasticidad del hormigón (Concrete Damaged
-Plasticity), la malla de sección con barras embebidas, y la interfaz de
-usuario. El plan completo (formulación, arquitectura, riesgos) está en
-el historial de la sesión de desarrollo, no versionado en el repo.
+Pendiente: integrar el CDP dentro del elemento Q4 (hoy solo corre a
+nivel de punto material, con su propio return mapping pero sin la
+regularización crack-band ni la robustez de solver que necesita para
+mallas reales), la malla de sección con barras embebidas, y la interfaz
+de usuario. El plan completo (formulación, arquitectura, riesgos) está
+en el historial de la sesión de desarrollo, no versionado en el repo.
 
-**Aviso**: algunos valores numéricos por defecto de la ley de
-adherencia (`materials/bond_mc2010.py`, Tabla 6.1-1 del fib Model Code
-2010) no pudieron verificarse contra el texto oficial del código
-durante el desarrollo (documentado en el docstring del módulo); la
-forma de la curva es correcta, pero cotejar esos números antes de usar
-el módulo en un cálculo de producción.
+**Avisos de honestidad técnica (no ocultar antes de usar en producción)**:
+
+- Algunos valores numéricos por defecto de la ley de adherencia
+  (`materials/bond_mc2010.py`, Tabla 6.1-1 del fib Model Code 2010) no
+  pudieron verificarse contra el texto oficial del código durante el
+  desarrollo (documentado en el docstring del módulo); la forma de la
+  curva es correcta, pero cotejar esos números antes de un cálculo de
+  producción.
+- El modelo CDP reproduce el UMBRAL de fluencia en tracción exactamente
+  en `ft` (verificado analítica y numéricamente), pero el PICO nominal
+  de la curva de tracción uniaxial puede superar `ft` en un ~30-40%
+  antes de ablandar (ver docstring de `concrete_cdp.py` y
+  `test_tension_softens_toward_zero_eventually`): es una consecuencia de
+  cómo el esfuerzo "efectivo" σ̄_t crece con el daño de Birtel & Mark en
+  esta calibración concreta, no un pico físico esperado en un hormigón
+  real (que es mucho más frágil). No se pudo resolver con confianza sin
+  acceso al PDF original de Lee & Fenves para verificar si falta algún
+  término de normalización. La compresión (pico, envolvente biaxial) no
+  tiene este problema y está validada con precisión.
+- La curva de compresión usa una deformación de pico (`eps_c1`)
+  aproximada por fórmula genérica, no la tabla por clase de resistencia
+  del MC2010 (no verificable sin el texto original), y el ablandamiento
+  post-pico es una rama lineal simplificada calibrada solo para disipar
+  la energía de fractura dada — no una curva normativa.
