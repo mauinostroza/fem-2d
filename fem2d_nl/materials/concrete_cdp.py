@@ -264,6 +264,47 @@ class ConcreteCDP:
         new_state = {"eps_pl": eps_pl_new, "kappa_t": kappa_t, "kappa_c": kappa_c}
         return stress, tangent, new_state
 
+    # ---- energía disipada (objetividad de malla de la regularización crack-band) ----
+    def dissipated_tensile_energy_density(self, kappa_t) -> np.ndarray:
+        """Energía disipada por fisuración, por unidad de VOLUMEN, hasta
+        `kappa_t` (mismas unidades que `G_F/l_ch`).
+
+        La curva de tracción se construyó (`build_tension_law`) a partir de
+        una relación esfuerzo NOMINAL - apertura de fisura `sigma(w)` cuya
+        área es exactamente `G_F` (verificado por construcción: 0.6*G_F +
+        0.4*G_F). La variable de endurecimiento `kappa_t` no es `w/l_ch`
+        directamente, sino `b_t*w/l_ch` (Birtel & Mark), así que hay que
+        deshacer ese cambio de variable: `d(w/l_ch) = dkappa_t/b_t`, y el
+        esfuerzo nominal es `(1-d_t)*sigma_bar_t` (no `sigma_bar_t`, que es
+        el esfuerzo EFECTIVO). La integral resultante,
+
+            E_diss(kappa_t) = (1/b_t) * integral[0,kappa_t] (1-d_t(k))*sigma_bar_t(k) dk
+
+        vale exactamente `G_F/l_ch` al llegar a la saturación completa de
+        la tabla, para cualquier `l_ch` (verificado numéricamente: da el
+        mismo `G_F/l_ch` con error < 1e-4 para `l_ch` entre 20 y 100 mm en
+        un caso típico) — es la cantidad correcta y objetiva de malla para
+        verificar la regularización crack-band, a nivel de punto material,
+        sin ninguna de las ambigüedades de localización FEM / energía
+        elástica recuperable que hicieron descartar el intento a nivel de
+        malla completa en la sesión S4 (ver README)."""
+        nominal = (1.0 - self.d_t_table) * self.sigma_bar_t_table
+        increment = 0.5 * (nominal[:-1] + nominal[1:]) * np.diff(self.kappa_t)
+        cumulative = np.concatenate([[0.0], np.cumsum(increment)]) / self.p.b_t
+        return np.interp(np.asarray(kappa_t), self.kappa_t, cumulative)
+
+    def dissipated_compressive_energy_density(self, kappa_c) -> np.ndarray:
+        """Análogo en compresión. A diferencia de tracción, la rama de
+        ablandamiento en compresión NO se construyó forzando que esta
+        integral reproduzca `G_c/l_ch` exactamente (es una rama lineal
+        simplificada, ver `concrete_curves.build_compression_law`) — sirve
+        como chequeo de consistencia/objetividad relativo entre mallas,
+        no como verificación exacta contra `G_c`."""
+        nominal = (1.0 - self.d_c_table) * self.sigma_bar_c_table
+        increment = 0.5 * (nominal[:-1] + nominal[1:]) * np.diff(self.kappa_c)
+        cumulative = np.concatenate([[0.0], np.cumsum(increment)]) / self.p.b_c
+        return np.interp(np.asarray(kappa_c), self.kappa_c, cumulative)
+
     def _numeric_tangent(self, strain, state, stress0):
         n = strain.shape[0]
         h = max(1e-7 * self.ft / max(self.e0, 1.0), 1e-10)

@@ -138,15 +138,44 @@ Avance hasta ahora (ver `tests/nl/`):
   solver global — se trata como cualquier otro fallo de iteración y
   dispara un recorte de paso. Ver `tests/nl/test_concrete_q4_integration.py`.
 
-Pendiente: la malla de sección con barras embebidas, y la interfaz de
-usuario. El plan completo (formulación, arquitectura, riesgos) está en
-el historial de la sesión de desarrollo, no versionado en el repo.
+- Malla estructurada de sección (`mesh/section.py`, `mesh/structured.py`),
+  en NumPy puro (sin gmsh — no hace falta resolver otra vez el problema de
+  threading gmsh/Streamlit del modo lineal): franja rectangular con
+  hormigón `quad4` + capas de armadura como `truss2`, en modo adherencia
+  perfecta (comparten nodo con el hormigón) o `bond_slip` (nodos de acero
+  duplicados + `bond_link` con la ley del fib MC2010). Las filas de malla
+  se ajustan ("snapping") a la profundidad exacta de cada capa.
+- Momento-curvatura (`postprocess.py::moment_curvature`) vía FEM completo:
+  cinemática de secciones planas impuesta como condición esencial en
+  ambos extremos de la franja (perfil lineal de `ux`, reutilizando
+  `DisplacementControl` sin necesitar multi-point constraints), M y N
+  extraídos de las reacciones nodales (exacto por equilibrio FEM, sin
+  hipótesis adicionales). Validado en régimen elástico contra la teoría
+  de vigas de sección transformada (dentro del 2%) y muestra ablandamiento
+  claro de la rigidez secante tras la fisuración. Ver
+  `tests/nl/test_moment_curvature.py` (marcado `slow`) y el aviso de
+  honestidad técnica sobre `y_na` fijo, abajo.
+- Cierre del ítem abierto de S4 (energía disipada): en vez de reintentar
+  el enfoque fallido de comparar el área bajo la curva P-δ global entre
+  mallas, se agregó `ConcreteCDP.dissipated_tensile_energy_density()`,
+  la integral correcta a nivel de punto material (sin FEM) que vale
+  exactamente `G_F/l_ch` para cualquier tamaño de elemento asumido —
+  verificado numéricamente objetivo de malla (< 1% de dispersión) en
+  `tests/nl/test_dissipated_energy_objective.py`. Este es el test de
+  objetividad de malla que S4 no pudo cerrar limpiamente; queda cerrado
+  a nivel material, no a nivel de localización de fisura en un FEM
+  completo (eso sigue abierto, ver debajo).
+
+Pendiente: la interfaz de usuario (S6). El plan completo (formulación,
+arquitectura, riesgos) está en el historial de la sesión de desarrollo,
+no versionado en el repo.
 
 **Alcance honesto de lo que NO se logró en la sesión S4** (se intentó y
 se descartó, en vez de forzar un test que pasara sin decir la verdad):
-un test cuantitativo de "objetividad de malla" (comparar la energía
-disipada entre mallas con distinto refinamiento, o contra la energía de
-fractura analítica G_F·área). Se encontraron dos problemas reales:
+un test cuantitativo de "objetividad de malla" a nivel de FEM completo
+(comparar la energía disipada entre mallas con distinto refinamiento, o
+contra la energía de fractura analítica G_F·área, a partir de la curva
+carga-desplazamiento global). Se encontraron dos problemas reales:
 (1) una barra perfectamente uniforme sin imperfección no tiene un
 patrón de localización bien definido — es el error clásico de este tipo
 de test, ya documentado en la literatura de crack-band, y hace falta
@@ -154,13 +183,36 @@ una imperfección explícita para forzar la localización; (2) el área
 bajo la curva carga-desplazamiento GLOBAL incluye energía elástica
 recuperable del resto de la estructura, no solo la energía disipada por
 la fisura, así que compararla contra G_F·área no es válido sin antes
-extraer la energía disipada de las variables de estado del material
-(pendiente, más apropiado para `postprocess.py` en la sesión S5).
-Empujar cualquier malla a daño casi totalmente saturado además es
-numéricamente muy exigente incluso con line search y cutback (matriz
-tangente casi singular) y probablemente necesite arc-length (sesión S7,
-no implementada). Quien continúe este trabajo debería tratar la
-objetividad de malla como un ítem abierto, no como algo ya verificado.
+extraer la energía disipada de las variables de estado del material.
+La sesión S5 resolvió el punto (2) a nivel material (ver arriba), pero el
+punto (1) — un test de objetividad de malla end-to-end sobre localización
+real en un FEM completo — sigue sin resolverse: empujar cualquier malla a
+daño casi totalmente saturado sigue siendo numéricamente muy exigente
+incluso con line search y cutback (matriz tangente casi singular) y
+probablemente necesite arc-length (sesión S7, no implementada). Quien
+continúe este trabajo debería tratar la objetividad de malla a nivel FEM
+como un ítem abierto, no como algo ya verificado.
+
+**Alcance honesto de lo que NO se logró en la sesión S5**: el plan
+original pedía verificar que el modo de adherencia perfecta y el modo
+`bond_slip` converjan al mismo momento último `M_u`. Al investigarlo se
+encontró que, en la franja corta usada para `moment_curvature`, el
+resultado de `bond_slip` en curvaturas intermedias resultó sorprendentemente
+sensible al número de pasos de carga usados para llegar ahí (con 10 pasos
+coincide con adherencia perfecta dentro del 0.1%; con 15-30 pasos difiere
+hasta ~40-50% en curvaturas intermedias, aunque ambos casos reportan
+"convergido"). La sospecha más probable, sin confirmar con el tiempo
+disponible: los nodos de acero duplicados en la cara de referencia quedan
+completamente libres (`moment_curvature` no les impone ninguna condición,
+ver su docstring), representando una barra que "termina" ahí en vez de
+continuar más allá del tramo modelado — un artefacto de usar una franja
+corta, no necesariamente un error de la ley de adherencia. En vez de
+forzar una comparación cuantitativa de `M_u` que podría estar ocultando
+este problema, se descartó y se dejaron en su lugar chequeos más modestos
+(`tests/nl/test_moment_curvature.py::test_bond_slip_mode_runs_and_is_monotonic`).
+Diagnosticar esto con confianza (posiblemente alargando `span` o agregando
+una condición de continuidad al acero en la cara de referencia) queda
+como ítem abierto.
 
 **Avisos de honestidad técnica (no ocultar antes de usar en producción)**:
 
