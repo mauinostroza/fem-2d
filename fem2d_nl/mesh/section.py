@@ -10,6 +10,8 @@ la sección) se usa como espesor fuera de plano de los elementos `quad4`.
 
 from dataclasses import dataclass
 
+from fem2d_nl.exceptions import GeometryError
+
 
 @dataclass(frozen=True)
 class SectionGeometry:
@@ -21,9 +23,9 @@ class SectionGeometry:
 
     def __post_init__(self):
         if self.width <= 0 or self.height <= 0 or self.span <= 0:
-            raise ValueError("width, height y span deben ser positivos.")
+            raise GeometryError("width, height y span deben ser positivos.")
         if self.nx < 1 or self.ny < 1:
-            raise ValueError("nx y ny deben ser >= 1.")
+            raise GeometryError("nx y ny deben ser >= 1.")
 
 
 @dataclass(frozen=True)
@@ -35,9 +37,9 @@ class RebarLayer:
 
     def __post_init__(self):
         if self.n_bars < 1:
-            raise ValueError("n_bars debe ser >= 1.")
+            raise GeometryError("n_bars debe ser >= 1.")
         if self.diameter <= 0:
-            raise ValueError("diameter debe ser positivo.")
+            raise GeometryError("diameter debe ser positivo.")
 
     @property
     def area(self) -> float:

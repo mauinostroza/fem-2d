@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from fem2d_nl.bc import dof_index, fixed_dofs_from_nodes
+from fem2d_nl.exceptions import GeometryError
 from fem2d_nl.solver.controls import DisplacementControl
 from fem2d_nl.solver.newton import SolverOptions, nonlinear_solve
 
@@ -50,6 +51,10 @@ class MomentCurvatureResult:
     y_na: float
     converged: bool
     message: str = ""
+    final_states: list | None = None
+    """Estado por grupo (alineado con `model.groups`) del último paso
+    convergido — p. ej. para dibujar un contorno de daño con
+    `visualization_nl.plot_damage_contour`. `None` si ningún paso convergió."""
 
 
 def transformed_elastic_centroid(geom, rebar_layers, e_concrete) -> float:
@@ -76,7 +81,7 @@ def transformed_elastic_centroid(geom, rebar_layers, e_concrete) -> float:
 def _face_nodes(model, x_target: float, tol: float) -> np.ndarray:
     matches = np.nonzero(np.abs(model.nodes[:, 0] - x_target) < tol)[0]
     if matches.size == 0:
-        raise ValueError(f"No se encontraron nodos en x={x_target}.")
+        raise GeometryError(f"No se encontraron nodos en x={x_target}.")
     return matches
 
 
@@ -88,6 +93,7 @@ def moment_curvature(
     n_steps: int = 20,
     options: SolverOptions | None = None,
     node_match_tol: float | None = None,
+    progress_cb=None,
 ) -> MomentCurvatureResult:
     """Analiza `model` (construido por `mesh.structured.build_section_mesh`
     con ese `span`) bajo curvatura creciente hasta `kappa_max`, en
@@ -114,7 +120,9 @@ def moment_curvature(
     control = DisplacementControl(
         fixed_dofs=fixed, prescribed_dofs=prescribed, prescribed_values=prescribed_values
     )
-    result = nonlinear_solve(model, control, options or SolverOptions(n_steps=n_steps))
+    result = nonlinear_solve(
+        model, control, options or SolverOptions(n_steps=n_steps), progress_cb=progress_cb
+    )
 
     y_ref = model.nodes[ref_nodes, 1]
     ref_ux_dofs = np.array([dof_index(int(n), 0) for n in ref_nodes])
@@ -132,4 +140,5 @@ def moment_curvature(
         y_na=y_na,
         converged=result.converged,
         message=result.message,
+        final_states=result.steps[-1].states if result.steps else None,
     )

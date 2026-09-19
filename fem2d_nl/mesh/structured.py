@@ -27,6 +27,7 @@ import math
 import numpy as np
 
 from fem2d_nl.elements import quad4
+from fem2d_nl.exceptions import GeometryError, MaterialModelError
 from fem2d_nl.mesh.section import RebarLayer, SectionGeometry
 from fem2d_nl.model import ElementGroup, Model
 
@@ -46,12 +47,12 @@ def _snap_rows(geom: SectionGeometry, rebar_layers: list[RebarLayer]) -> np.ndar
     used_rows: dict[int, float] = {}
     for layer in rebar_layers:
         if not (0.0 <= layer.depth_y <= geom.height):
-            raise ValueError(
+            raise GeometryError(
                 f"depth_y={layer.depth_y} fuera de la sección (0..{geom.height})."
             )
         idx = int(np.argmin(np.abs(y_rows - layer.depth_y)))
         if idx in used_rows and used_rows[idx] != layer.depth_y:
-            raise ValueError(
+            raise GeometryError(
                 f"Dos capas de armadura (y={used_rows[idx]} e y={layer.depth_y}) caen en "
                 f"la misma fila de malla; aumente ny o separe las capas."
             )
@@ -87,9 +88,9 @@ def build_section_mesh(
     que mapea `depth_y` -> `BondLaw` para dar una ley distinta por capa.
     """
     if bond_mode not in ("perfect", "bond_slip"):
-        raise ValueError(f"bond_mode debe ser 'perfect' o 'bond_slip', no {bond_mode!r}.")
+        raise MaterialModelError(f"bond_mode debe ser 'perfect' o 'bond_slip', no {bond_mode!r}.")
     if bond_mode == "bond_slip" and rebar_layers and bond_params is None:
-        raise ValueError("bond_mode='bond_slip' requiere bond_params.")
+        raise MaterialModelError("bond_mode='bond_slip' requiere bond_params.")
 
     n_cols = geom.nx + 1
     n_rows_ = geom.ny + 1
@@ -149,7 +150,7 @@ def build_section_mesh(
             trib[1:-1] = (x_cols[2:] - x_cols[:-2]) / 2.0
             e_steel = getattr(layer.steel, "e_resolved", None)
             if e_steel is None:
-                raise ValueError(
+                raise MaterialModelError(
                     "bond_mode='bond_slip' requiere que el material de la capa exponga "
                     "`e_resolved` (p. ej. MultilinearSteel) para dimensionar la rigidez normal del link."
                 )

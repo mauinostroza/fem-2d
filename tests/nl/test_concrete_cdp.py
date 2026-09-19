@@ -154,6 +154,17 @@ def test_damage_bounded_in_zero_one():
     assert np.all((d_c >= 0.0) & (d_c < 1.0))
 
 
+def test_damage_at_public_helper_matches_private_methods():
+    """`damage_at` (S6, para el contorno de daño de la UI) debe ser
+    exactamente equivalente a llamar `_d_t`/`_d_c` por separado."""
+    cdp = _material()
+    kappa_t = np.linspace(0.0, cdp.kappa_t[-1], 10)
+    kappa_c = np.linspace(0.0, cdp.kappa_c[-1], 10)
+    d_t, d_c = cdp.damage_at(kappa_t, kappa_c)
+    assert np.array_equal(d_t, cdp._d_t(kappa_t))
+    assert np.array_equal(d_c, cdp._d_c(kappa_c))
+
+
 def test_plane_stress_is_exact_by_construction():
     """sigma_zz nunca se calcula ni se almacena: el modelo trabaja
     íntegramente con 3 componentes (xx,yy,xy) y el esfuerzo principal

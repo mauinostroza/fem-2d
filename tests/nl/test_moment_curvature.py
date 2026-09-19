@@ -106,6 +106,28 @@ def test_perfect_bond_softens_after_cracking():
     assert secant_final < 0.6 * ei_elastic
 
 
+def test_progress_cb_and_final_states_are_populated():
+    """S6: `moment_curvature` expone `progress_cb` (para la barra de
+    progreso de la UI) y `final_states` (para el contorno de daño)."""
+    geom = SectionGeometry(width=200.0, height=400.0, span=200.0, nx=2, ny=4)
+    l_ch = nominal_char_length(geom)
+    params = CDPParameters(young_modulus=30_000.0, poisson_ratio=0.2, fck=25.0)
+    cdp = ConcreteCDP(params, char_length=l_ch)
+    model = build_section_mesh(geom, [], cdp, bond_mode="perfect")
+
+    calls = []
+    res = moment_curvature(
+        model, geom.span, geom.height / 2.0, kappa_max=2e-7, n_steps=3,
+        options=SolverOptions(n_steps=3, max_iterations=30),
+        progress_cb=lambda *args: calls.append(args),
+    )
+    assert res.converged
+    assert len(calls) == 3
+    assert res.final_states is not None
+    assert len(res.final_states) == len(model.groups)
+    assert res.final_states[0]["kappa_t"].shape[0] == model.groups[0].n_gauss_total
+
+
 def test_bond_slip_mode_runs_and_is_monotonic():
     """Chequeo modesto y robusto del camino `bond_slip` a nivel de malla
     completa (nodos de acero duplicados + `bond_link`): converge y da un

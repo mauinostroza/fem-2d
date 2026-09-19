@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from fem2d_nl.assembly import assemble
+from fem2d_nl.exceptions import GeometryError
 from fem2d_nl.materials.bond_mc2010 import BondLaw, BondParameters
 from fem2d_nl.materials.concrete_cdp import CDPParameters, ConcreteCDP
 from fem2d_nl.materials.steel_uniaxial import MultilinearSteel
@@ -64,7 +65,7 @@ def test_two_layers_collide_on_same_row_raises():
     geom = SectionGeometry(width=200.0, height=400.0, span=100.0, nx=2, ny=4)  # filas cada 100mm
     layer_a = RebarLayer(depth_y=40.0, n_bars=3, diameter=16.0, steel=_steel())
     layer_b = RebarLayer(depth_y=45.0, n_bars=2, diameter=12.0, steel=_steel())  # misma fila más cercana
-    with pytest.raises(ValueError):
+    with pytest.raises(GeometryError):
         build_section_mesh(geom, [layer_a, layer_b], _concrete(geom), bond_mode="perfect")
 
 

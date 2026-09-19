@@ -85,7 +85,10 @@ teórico de Kirsch (Kt ≈ 3).
 ## Estructura del proyecto
 
 ```
-app.py                        # interfaz Streamlit
+app.py                         # router Streamlit: elige entre los 2 modos
+ui/
+├── linear_plate.py             # UI del modo lineal (placa con agujero)
+└── rc_section.py               # UI del modo no lineal (sección de hormigón armado)
 fem2d/
 ├── exceptions.py             # errores de dominio (mensajes accionables en la UI)
 ├── materials.py               # presets de material
@@ -93,16 +96,47 @@ fem2d/
 ├── boundary_conditions.py     # bordes -> condiciones/cargas para SolidsPy
 ├── solver.py                  # integración con SolidsPy y cálculo de esfuerzos
 └── visualization.py           # gráficos matplotlib
-tests/                         # pytest, sin dependencia de la UI
+fem2d_nl/                       # motor no lineal (ver la sección de abajo)
+├── mesh/                       # SectionGeometry/RebarLayer + malla estructurada
+├── materials/                  # CDP, acero multilineal, adherencia MC2010
+├── elements/, solver/          # Q4/truss2/bond_link, Newton-Raphson propio
+├── postprocess.py              # momento-curvatura
+└── visualization_nl.py         # gráficos del modo no lineal
+tests/                         # pytest, sin dependencia de la UI (tests/nl/ para fem2d_nl)
 ```
 
-## En desarrollo: modo no lineal (hormigón armado)
+## Modo no lineal: sección de hormigón armado (momento-curvatura)
 
-Hay un segundo motor de cálculo, `fem2d_nl/`, en construcción para un
-modo de análisis nuevo (sección/elemento de hormigón armado con no
-linealidad de material) que todavía no está conectado a la interfaz. Es
-independiente del módulo lineal de arriba: solver Newton-Raphson propio
-(SolidsPy no sirve para esto), con su propio elemento continuo (Q4).
+Hay un segundo motor de cálculo, `fem2d_nl/`, para un modo de análisis
+nuevo (sección de hormigón armado con no linealidad de material completa),
+ya conectado a la interfaz (`ui/rc_section.py`, seleccionable desde
+"Modo de análisis" en la barra lateral). Es independiente del modo lineal
+de arriba: solver Newton-Raphson propio (SolidsPy no sirve para esto), con
+su propio elemento continuo (Q4). Es un modo **experimental**: revisar los
+avisos de honestidad técnica más abajo antes de usar los resultados en
+producción.
+
+Permite:
+
+- Definir la geometría de una franja de sección (ancho, alto, longitud de
+  la franja analizada, malla) y capas de armadura (profundidad, número de
+  barras, diámetro) con una tabla editable.
+- Elegir hormigón (f'ck, con overrides opcionales de `ft`/`GF`/`eps_c1`
+  para quien tenga valores verificados) y acero (fy, fu, deformación
+  última) con curvas derivadas automáticamente por el fib Model Code 2010.
+- Elegir adherencia perfecta o adherencia según el fib MC2010 (barras
+  discretas + elementos de interfaz).
+- Correr un análisis de momento-curvatura hasta una deformación máxima
+  objetivo, con barra de progreso, y ver la curva M-κ, un preview de la
+  malla con las capas de armadura, y el contorno de daño del hormigón en
+  el último paso.
+- Descargar la curva M-κ en CSV.
+
+Nota de rendimiento: es un solver no lineal en Python puro, sin
+aceleración — una malla chica (~15-20 elementos) tarda del orden de un
+minuto para una curva completa hasta la deformación última del hormigón
+(0.0035); mallas más finas o más pasos de carga pueden tardar varios
+minutos. La UI lo advierte junto al campo de malla.
 
 Avance hasta ahora (ver `tests/nl/`):
 
@@ -166,9 +200,24 @@ Avance hasta ahora (ver `tests/nl/`):
   a nivel material, no a nivel de localización de fisura en un FEM
   completo (eso sigue abierto, ver debajo).
 
-Pendiente: la interfaz de usuario (S6). El plan completo (formulación,
-arquitectura, riesgos) está en el historial de la sesión de desarrollo,
-no versionado en el repo.
+- Interfaz Streamlit (`ui/rc_section.py`, `fem2d_nl/visualization_nl.py`)
+  conectada al router de `app.py`: geometría/armadura/materiales/adherencia
+  por formulario, barra de progreso durante el análisis (usa el
+  `progress_cb` que ahora expone `moment_curvature`), curva M-κ, preview
+  de malla y contorno de daño (`ConcreteCDP.damage_at`, envoltorio público
+  agregado en esta sesión). Probada en vivo en el navegador (Playwright):
+  el modo de adherencia perfecta corrió un caso completo de principio a
+  fin (geometría por defecto, 3⌀16 a 40mm, εcu=0.0035) y mostró una curva
+  M-κ con la forma esperada (M máx ≈169 kN·m) y un contorno de daño a
+  tracción físicamente razonable (más daño en la fibra inferior, en
+  tracción). El modo `bond_slip` está cubierto por
+  `test_bond_slip_mode_runs_and_is_monotonic`; la verificación manual en
+  vivo de ese modo específico quedó corriendo en segundo plano al cerrar
+  la sesión sin confirmar su resultado — si alguien la retoma, revisar que
+  termine sin error antes de darla por probada en la UI.
+
+El plan completo (formulación, arquitectura, riesgos) está en el
+historial de la sesión de desarrollo, no versionado en el repo.
 
 **Alcance honesto de lo que NO se logró en la sesión S4** (se intentó y
 se descartó, en vez de forzar un test que pasara sin decir la verdad):

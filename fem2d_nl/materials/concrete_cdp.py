@@ -264,6 +264,12 @@ class ConcreteCDP:
         new_state = {"eps_pl": eps_pl_new, "kappa_t": kappa_t, "kappa_c": kappa_c}
         return stress, tangent, new_state
 
+    def damage_at(self, kappa_t, kappa_c) -> tuple[np.ndarray, np.ndarray]:
+        """`(d_t, d_c)` en las variables de endurecimiento dadas — envoltorio
+        público de `_d_t`/`_d_c` para que la UI (contorno de daño) no
+        dependa de métodos privados."""
+        return self._d_t(np.asarray(kappa_t)), self._d_c(np.asarray(kappa_c))
+
     # ---- energía disipada (objetividad de malla de la regularización crack-band) ----
     def dissipated_tensile_energy_density(self, kappa_t) -> np.ndarray:
         """Energía disipada por fisuración, por unidad de VOLUMEN, hasta
