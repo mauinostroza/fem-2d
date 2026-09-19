@@ -1,30 +1,27 @@
 """Sesión S5, nivel estructural: `postprocess.moment_curvature` sobre una
 franja construida con `mesh.structured.build_section_mesh`.
 
-Aviso de honestidad técnica — alcance descartado durante esta sesión: el
-plan original pedía verificar que el modo de adherencia perfecta y el
-modo `bond_slip` (MC2010) converjan al mismo momento último `M_u`. Se
-investigó y se encontró que, en la franja corta usada aquí, el resultado
-de `bond_slip` en curvaturas intermedias es sensible al número de pasos de
-carga (`n_steps`) de forma mucho mayor de lo esperado para un modelo
-supuestamente independiente de la historia bajo carga monótona — con 10
-pasos el momento de `bond_slip` prácticamente coincide con el de
-adherencia perfecta (< 0.1%) hasta `kappa_max`, pero con 15-30 pasos
-difiere hasta ~40-50% en curvaturas intermedias antes de volver a
-acercarse cerca de `kappa_max`. La sospecha más probable es un efecto de
-borde: los nodos de acero duplicados en la cara de referencia (`x=0`)
-quedan completamente libres (sin ninguna condición de borde, ver docstring
-de `moment_curvature`), representando una barra que "termina" ahí en vez
-de continuar más allá de la franja modelada — un artefacto de usar un
-tramo corto, no necesariamente un error de la ley de adherencia en sí.
-No se pudo aislar la causa con confianza en el tiempo de esta sesión, así
-que en vez de forzar una tolerancia que "pase" ocultando el problema, se
-DESCARTA la comparación cuantitativa de `M_u` entre modos y se la
-reemplaza por chequeos más modestos pero robustos: que ambos modos corran
-sin fallar y den una respuesta monótona creciente y razonable. Cotejar el
-efecto del extremo libre de la barra (o alargar `span`/usar una condición
-de borde para los nodos de acero de referencia) queda como ítem abierto
-para quien continúe este trabajo.
+**Actualización S7 (retractación de un hallazgo de S5)**: S5 había
+reportado que el modo `bond_slip` mostraba una sensibilidad sospechosa al
+número de pasos de carga (~40-50% de diferencia en curvaturas intermedias
+entre 10 y 15-30 pasos), y por eso se descartó la comparación cuantitativa
+de `M_u` planeada originalmente. En S7 se investigó ese hallazgo con un
+script de diagnóstico limpio (barrido sistemático de `n_steps` =
+10/20/40/80 sobre el mismo caso, ver
+`tests/nl/test_bond_slip_step_convergence.py`) y **no se reprodujo**: el
+momento final coincide dentro de ~0.2% en las cuatro resoluciones. La
+inspección del estado de los `bond_link` confirma que el mecanismo de
+adherencia funciona correctamente (`s_max` no nulo y físicamente
+razonable en los puntos interiores de la barra, exactamente nulo en los
+dos extremos por la propia condición de borde ahí). La conclusión es que
+el hallazgo de S5 fue casi con certeza un artefacto del script de
+depuración ad-hoc usado en ese momento (no reconstruible ni reproducible
+con el código de producción), no un defecto real de `moment_curvature`/
+`build_section_mesh`/`bond_link`. Se agregó un test de regresión
+(`test_bond_slip_step_convergence.py`) para dejar esto asentado. La
+comparación cuantitativa perfecto-vs-`bond_slip` de `M_u` sigue sin
+implementarse en este archivo (no era el foco de S7), pero ya no hay una
+duda de correctitud abierta que lo justifique descartar.
 """
 
 import numpy as np

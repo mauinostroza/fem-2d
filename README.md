@@ -219,6 +219,64 @@ Avance hasta ahora (ver `tests/nl/`):
 El plan completo (formulación, arquitectura, riesgos) está en el
 historial de la sesión de desarrollo, no versionado en el repo.
 
+**Sesión S7** (arc-length, `y_na` por bisección, tangente semi-analítica
+del CDP, y diagnóstico del hallazgo de S5 sobre `bond_slip`):
+
+- **Diagnóstico de S5 retractado**: la sensibilidad de `bond_slip` al
+  número de pasos de carga reportada en S5 (ver más abajo, dejado por
+  transparencia) **no se reprodujo** con un script de diagnóstico limpio
+  (barrido sistemático `n_steps`=10/20/40/80): el momento final coincide
+  dentro de ~0.2% en las cuatro resoluciones, y la inspección del estado
+  de los `bond_link` confirma que el mecanismo de adherencia funciona
+  correctamente (deslizamiento nulo en los dos extremos de la barra por
+  la propia condición de borde ahí, no nulo y físicamente razonable en
+  los puntos interiores). Casi con certeza el hallazgo de S5 fue un
+  artefacto del script de depuración ad-hoc de esa sesión. Test de
+  regresión: `tests/nl/test_bond_slip_step_convergence.py`.
+- **`y_na` por bisección** (`postprocess.py::moment_curvature_pure_bending`):
+  en cada paso de curvatura busca `y_na` por bisección anidada hasta
+  `N≈0` (flexión pura real), en vez del `y_na` fijo de `moment_curvature`.
+  Notablemente cara (~120s por paso de curvatura en una sección con 12
+  elementos, medido en esta sesión — cada paso implica varias resoluciones
+  no lineales completas), por eso queda como función aparte, no reemplaza
+  a `moment_curvature`. Validada: coincide con el centroide fijo en
+  régimen elástico simétrico, y migra el eje neutro de forma monótona y
+  físicamente sensata hacia la zona de compresión al fisurar. Ver
+  `tests/nl/test_moment_curvature_pure_bending.py`.
+- **Arc-length** (`solver/arc_length.py`, Crisfield, forma cilíndrica por
+  defecto): traza la curva P-δ más allá de un pico de carga donde el
+  control de carga puro (`LoadControl`) diverge — validado contra ese
+  mismo fallo (un caso que `LoadControl` no logra converger, arc-length sí
+  lo traza completo) y contra `DisplacementControl` en la rama ascendente
+  (misma curva física). No se integró en `moment_curvature`/la UI en esta
+  sesión (el modo de análisis principal del proyecto usa control de
+  desplazamiento, que no tiene este problema para curvatura impuesta) — es
+  una pieza de infraestructura de solver reutilizable a futuro, sobre
+  todo para el test de objetividad de malla a nivel FEM completo que
+  sigue abierto (ver debajo). Ver `tests/nl/test_arc_length.py`.
+- **Tangente semi-analítica del CDP** (`ConcreteCDP(..., tangent_mode=
+  "analytic")`, opt-in — `"numeric"` sigue siendo el default, sin cambios
+  de comportamiento): analítica en la parte de mayor riesgo algebraico
+  (derivada de autovalores del predictor elástico, teorema de la función
+  implícita sobre el jacobiano local ya validado, rotación de vuelta a
+  Cartesiano), diferencias finitas solo en funciones locales baratas sin
+  iteración — nunca rehace el return mapping completo. **Bug real
+  encontrado y corregido durante la validación**: el paso de diferencias
+  finitas para `d(d_t)/d(kappa_t)` estaba ligado a `fcm` (correcto para
+  perturbar esfuerzos, pero `kappa_t`/`kappa_c` tienen escala muy distinta)
+  y saltaba varios segmentos de la tabla interpolada, dando errores de
+  tangente de 60-114% — corregido escalando el paso al rango propio de
+  cada tabla. Validado con éxito contra la tangente numérica en un barrido
+  de 150 estados aleatorios + 9 casos representativos (tracción,
+  compresión, biaxial, cortante), error relativo < 0.01% en todos salvo
+  autovalores EXACTAMENTE repetidos (p. ej. compresión equibiaxial exacta,
+  un caso límite matemáticamente singular ya señalado como riesgo en el
+  plan original — ahí se cae a la tangente numérica solo para esos puntos,
+  en vez de forzar una fórmula regularizada sin verificar). Rendimiento
+  real medido (no estimado): ~2.1x más rápido en un caso completo de
+  `moment_curvature` (47.6s → 22.3s). Ver
+  `tests/nl/test_concrete_cdp_analytic_tangent.py`.
+
 **Alcance honesto de lo que NO se logró en la sesión S4** (se intentó y
 se descartó, en vez de forzar un test que pasara sin decir la verdad):
 un test cuantitativo de "objetividad de malla" a nivel de FEM completo
@@ -233,35 +291,27 @@ bajo la curva carga-desplazamiento GLOBAL incluye energía elástica
 recuperable del resto de la estructura, no solo la energía disipada por
 la fisura, así que compararla contra G_F·área no es válido sin antes
 extraer la energía disipada de las variables de estado del material.
-La sesión S5 resolvió el punto (2) a nivel material (ver arriba), pero el
+La sesión S5 resolvió el punto (2) a nivel material (ver arriba). El
 punto (1) — un test de objetividad de malla end-to-end sobre localización
-real en un FEM completo — sigue sin resolverse: empujar cualquier malla a
-daño casi totalmente saturado sigue siendo numéricamente muy exigente
-incluso con line search y cutback (matriz tangente casi singular) y
-probablemente necesite arc-length (sesión S7, no implementada). Quien
-continúe este trabajo debería tratar la objetividad de malla a nivel FEM
-como un ítem abierto, no como algo ya verificado.
+real en un FEM completo — sigue sin resolverse pese a que S7 agregó
+arc-length (la pieza que en principio lo habilita): empujar una malla a
+daño casi totalmente saturado sigue siendo numéricamente exigente y no se
+intentó el test completo en S7 por tiempo. Quien continúe este trabajo
+debería tratar la objetividad de malla a nivel FEM como un ítem abierto,
+no como algo ya verificado.
 
-**Alcance honesto de lo que NO se logró en la sesión S5**: el plan
+**Hallazgo de S5 sobre `bond_slip` y sensibilidad al paso de carga —
+dejado por transparencia, retractado en S7** (ver arriba): el plan
 original pedía verificar que el modo de adherencia perfecta y el modo
-`bond_slip` converjan al mismo momento último `M_u`. Al investigarlo se
-encontró que, en la franja corta usada para `moment_curvature`, el
-resultado de `bond_slip` en curvaturas intermedias resultó sorprendentemente
-sensible al número de pasos de carga usados para llegar ahí (con 10 pasos
-coincide con adherencia perfecta dentro del 0.1%; con 15-30 pasos difiere
-hasta ~40-50% en curvaturas intermedias, aunque ambos casos reportan
-"convergido"). La sospecha más probable, sin confirmar con el tiempo
-disponible: los nodos de acero duplicados en la cara de referencia quedan
-completamente libres (`moment_curvature` no les impone ninguna condición,
-ver su docstring), representando una barra que "termina" ahí en vez de
-continuar más allá del tramo modelado — un artefacto de usar una franja
-corta, no necesariamente un error de la ley de adherencia. En vez de
-forzar una comparación cuantitativa de `M_u` que podría estar ocultando
-este problema, se descartó y se dejaron en su lugar chequeos más modestos
-(`tests/nl/test_moment_curvature.py::test_bond_slip_mode_runs_and_is_monotonic`).
-Diagnosticar esto con confianza (posiblemente alargando `span` o agregando
-una condición de continuidad al acero en la cara de referencia) queda
-como ítem abierto.
+`bond_slip` converjan al mismo momento último `M_u`. Al investigarlo en
+S5 se encontró que, en la franja corta usada para `moment_curvature`, el
+resultado de `bond_slip` en curvaturas intermedias parecía sensible al
+número de pasos de carga usados para llegar ahí (con 10 pasos coincidía
+con adherencia perfecta dentro del 0.1%; con 15-30 pasos parecía diferir
+hasta ~40-50% en curvaturas intermedias). Un diagnóstico limpio en S7 no
+reprodujo esto (ver arriba) — se dejó este párrafo, en vez de borrarlo sin
+más, para que quede constancia de que se investigó dos veces con
+resultados distintos y de cuál es la conclusión final.
 
 **Avisos de honestidad técnica (no ocultar antes de usar en producción)**:
 

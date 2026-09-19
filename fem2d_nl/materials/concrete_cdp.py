@@ -59,7 +59,14 @@ class CDPParameters:
 
 
 class ConcreteCDP:
-    def __init__(self, params: CDPParameters, char_length: float):
+    def __init__(self, params: CDPParameters, char_length: float, tangent_mode: str = "numeric"):
+        """`tangent_mode` (S7): `"numeric"` (default, sin cambios respecto
+        de S1-S6) o `"analytic"` — tangente SEMI-analítica opt-in, ver
+        `_compute_with_analytic_tangent`. Nunca cambia por defecto el
+        comportamiento ya validado."""
+        if tangent_mode not in ("numeric", "analytic"):
+            raise MaterialModelError(f"tangent_mode debe ser 'numeric' o 'analytic', no {tangent_mode!r}.")
+        self.tangent_mode = tangent_mode
         self.p = params
         self.l_ch = char_length
         self.e0 = params.young_modulus
@@ -187,7 +194,7 @@ class ConcreteCDP:
                 f"para {active.sum()} punto(s) de integración. Reduzca el paso de carga."
             )
         _, kappa_t, kappa_c = self._residual(x, s_tr, kappa_t_prev, kappa_c_prev)
-        return x[:, 0], x[:, 1], kappa_t, kappa_c
+        return x[:, 0], x[:, 1], kappa_t, kappa_c, x[:, 2]
 
     def _numeric_jacobian(self, x, s_tr, kappa_t_prev, kappa_c_prev):
         n = x.shape[0]
@@ -235,7 +242,7 @@ class ConcreteCDP:
         kappa_t, kappa_c = kappa_t_prev.copy(), kappa_c_prev.copy()
         if active.any():
             s_tr_active = np.stack([s1_tr[active], s2_tr[active]], axis=-1)
-            s1_a, s2_a, kt_a, kc_a = self._solve_active(
+            s1_a, s2_a, kt_a, kc_a, _dlam_a = self._solve_active(
                 s_tr_active, kappa_t_prev[active], kappa_c_prev[active]
             )
             s1[active], s2[active] = s1_a, s2_a
@@ -259,10 +266,223 @@ class ConcreteCDP:
         return stress, eps_pl_new, kappa_t, kappa_c
 
     def integrate(self, strain: np.ndarray, state: dict, dt: float):
+        if self.tangent_mode == "analytic":
+            return self._integrate_analytic(strain, state)
         stress, eps_pl_new, kappa_t, kappa_c = self._compute(strain, state)
         tangent = self._numeric_tangent(strain, state, stress)
         new_state = {"eps_pl": eps_pl_new, "kappa_t": kappa_t, "kappa_c": kappa_c}
         return stress, tangent, new_state
+
+    # ---- tangente semi-analítica (S7, opt-in) ---------------------------------
+    def _integrate_analytic(self, strain: np.ndarray, state: dict):
+        """Como `_compute` + `_numeric_tangent`, pero con una tangente
+        SEMI-analítica: analítica en la parte de mayor riesgo algebraico
+        bajo (rotación/autovalores, regla de la cadena de la rotación y
+        el daño), y por diferencias finitas SOLO en funciones locales
+        baratas y sin iteración (`_kappas`, `_flow_and_weight`, `_d_t`/
+        `_d_c`) — nunca vuelve a resolver el return mapping completo
+        (eso es lo caro de `_numeric_tangent`: 3 llamadas extra a
+        `_compute`, cada una con su propio Newton local). El jacobiano
+        LOCAL 3x3 del sistema de retorno sigue siendo el de
+        `_numeric_jacobian` ya validado (S3) — no se rederiva a mano,
+        para no duplicar el riesgo algebraico más alto del proyecto."""
+        eps_pl_prev = state["eps_pl"]
+        kappa_t_prev = state["kappa_t"]
+        kappa_c_prev = state["kappa_c"]
+        n = strain.shape[0]
+        fcm_scale = max(self.fcm, 1.0)
+
+        sigma_tr = np.einsum("ij,nj->ni", self.d0, strain - eps_pl_prev)
+        sxx, syy, sxy = sigma_tr[:, 0], sigma_tr[:, 1], sigma_tr[:, 2]
+        u = (sxx - syy) / 2.0
+        center = (sxx + syy) / 2.0
+        radius = np.sqrt(u**2 + sxy**2)
+        s1_tr = center + radius
+        s2_tr = center - radius
+        rot_active = radius > 1e-9 * fcm_scale
+        theta = np.where(rot_active, 0.5 * np.arctan2(2.0 * sxy, sxx - syy), 0.0)
+
+        f_trial = self._yield(s1_tr, s2_tr, kappa_t_prev, kappa_c_prev)
+        active = f_trial > _TOL * fcm_scale
+
+        s1, s2 = s1_tr.copy(), s2_tr.copy()
+        kappa_t, kappa_c = kappa_t_prev.copy(), kappa_c_prev.copy()
+        dlam = np.zeros(n)
+        if active.any():
+            s_tr_active = np.stack([s1_tr[active], s2_tr[active]], axis=-1)
+            s1_a, s2_a, kt_a, kc_a, dlam_a = self._solve_active(
+                s_tr_active, kappa_t_prev[active], kappa_c_prev[active]
+            )
+            s1[active], s2[active] = s1_a, s2_a
+            kappa_t[active], kappa_c[active] = kt_a, kc_a
+            dlam[active] = dlam_a
+
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        sigma_eff = np.stack(
+            [s1 * cos_t**2 + s2 * sin_t**2, s1 * sin_t**2 + s2 * cos_t**2, (s1 - s2) * sin_t * cos_t],
+            axis=-1,
+        )
+        d_t = self._d_t(kappa_t)
+        d_c = self._d_c(kappa_c)
+        r_weight = self._flow_and_weight(s1, s2)[3]
+        s_t = 1.0 - self.p.w_t * r_weight
+        s_c = 1.0 - self.p.w_c * (1.0 - r_weight)
+        damage = 1.0 - (1.0 - s_t * d_c) * (1.0 - s_c * d_t)
+        stress = (1.0 - damage)[:, None] * sigma_eff
+        eps_pl_new = strain - np.einsum("ij,nj->ni", self.d0_inv, sigma_eff)
+
+        tangent = np.tile(self.d0[None, :, :], (n, 1, 1))  # elástico por defecto (puntos inactivos)
+        # Activos con autovalores bien separados: tangente semi-analítica.
+        active_smooth = active & rot_active
+        if active_smooth.any():
+            idx = np.nonzero(active_smooth)[0]
+            tangent[idx] = self._active_tangent(
+                s1_tr[idx], s2_tr[idx], sxx[idx], syy[idx], sxy[idx], u[idx], radius[idx],
+                rot_active[idx], cos_t[idx], sin_t[idx],
+                s1[idx], s2[idx], dlam[idx], kappa_t_prev[idx], kappa_c_prev[idx],
+                kappa_t[idx], kappa_c[idx], d_t[idx], d_c[idx], r_weight[idx], sigma_eff[idx],
+            )
+        # Activos con autovalores (casi) repetidos (p. ej. compresión
+        # equibiaxial exacta): la derivada de autovalores `n_i⊗n_i` es
+        # singular/no está definida de forma única ahí (verificado en esta
+        # sesión: el error de la tangente semi-analítica se dispara justo
+        # en este caso, y solo ahí — a partir de ~0.01% fuera del punto
+        # exacto ya coincide con la numérica dentro de <1e-4). Es el mismo
+        # caso límite "autovalores repetidos" ya señalado como riesgo en
+        # el plan original — en vez de forzar una fórmula regularizada sin
+        # verificar, se cae a la tangente numérica (ya validada) solo para
+        # este subconjunto raro, que es barato de aislar.
+        active_singular = active & ~rot_active
+        if active_singular.any():
+            idx = np.nonzero(active_singular)[0]
+            sub_state = {k: v[idx] for k, v in state.items()}
+            tangent[idx] = self._numeric_tangent(strain[idx], sub_state, stress[idx])
+
+        new_state = {"eps_pl": eps_pl_new, "kappa_t": kappa_t, "kappa_c": kappa_c}
+        return stress, tangent, new_state
+
+    def _active_tangent(
+        self, s1_tr, s2_tr, sxx, syy, sxy, u, radius, rot_active, cos_t, sin_t,
+        s1, s2, dlam, kt_prev, kc_prev, kt, kc, d_t, d_c, r_weight, sigma_eff,
+    ) -> np.ndarray:
+        n = s1.shape[0]
+        fcm_scale = max(self.fcm, 1.0)
+        radius_safe = np.where(rot_active, radius, 1.0)
+
+        # d(s1_tr,s2_tr)/d(strain): fórmula analítica estándar de la derivada
+        # de autovalores de un tensor simétrico 2x2 (n_i⊗n_i), aquí en forma
+        # de Voigt directa a partir de (u,v,radio) — ya usada (sin derivar)
+        # para el propio ángulo de rotación en `_compute`.
+        row1 = np.stack([0.5 + 0.5 * u / radius_safe, 0.5 - 0.5 * u / radius_safe, sxy / radius_safe], axis=-1)
+        row2 = np.stack([0.5 - 0.5 * u / radius_safe, 0.5 + 0.5 * u / radius_safe, -sxy / radius_safe], axis=-1)
+        fallback = np.array([0.5, 0.5, 0.0])
+        row1 = np.where(rot_active[:, None], row1, fallback)
+        row2 = np.where(rot_active[:, None], row2, fallback)
+        d_str_dstrain = np.stack([row1, row2], axis=1) @ self.d0[None, :, :]  # (n,2,3)
+
+        # Jacobiano local ya validado (S3) en el punto convergido -> dx/d(s_tr)
+        # por el teorema de la función implícita (solo s1_tr,s2_tr entran
+        # explícitamente en r1,r2 con derivada -1; r3 no depende de ellos
+        # directamente), y de ahí dx/d(strain) encadenando con el paso anterior.
+        x_conv = np.stack([s1, s2, dlam], axis=-1)
+        s_tr = np.stack([s1_tr, s2_tr], axis=-1)
+        jac = self._numeric_jacobian(x_conv, s_tr, kt_prev, kc_prev)  # (n,3,3)
+        rhs = np.zeros((n, 3, 2))
+        rhs[:, 0, 0] = 1.0
+        rhs[:, 1, 1] = 1.0
+        dx_dstr = np.linalg.solve(jac, rhs)  # (n,3,2)
+        dx_dstrain = dx_dstr @ d_str_dstrain  # (n,3,3): filas = d(s1,s2,dlam)/d(strain)
+        ds1_dstrain = dx_dstrain[:, 0, :]
+        ds2_dstrain = dx_dstrain[:, 1, :]
+        ddlam_dstrain = dx_dstrain[:, 2, :]
+
+        # d(kappa_t,kappa_c)/d(s1,s2,dlam): diferencias finitas de `_kappas`
+        # (función cerrada, sin Newton — barata, no es el jacobiano de retorno)
+        h_s, h_l = 1e-6 * fcm_scale, 1e-9
+        kt0, kc0, _, _ = self._kappas(s1, s2, dlam, kt_prev, kc_prev)
+        kt_1, kc_1, _, _ = self._kappas(s1 + h_s, s2, dlam, kt_prev, kc_prev)
+        kt_2, kc_2, _, _ = self._kappas(s1, s2 + h_s, dlam, kt_prev, kc_prev)
+        kt_3, kc_3, _, _ = self._kappas(s1, s2, dlam + h_l, kt_prev, kc_prev)
+        dkt_ds1, dkc_ds1 = (kt_1 - kt0) / h_s, (kc_1 - kc0) / h_s
+        dkt_ds2, dkc_ds2 = (kt_2 - kt0) / h_s, (kc_2 - kc0) / h_s
+        dkt_dl, dkc_dl = (kt_3 - kt0) / h_l, (kc_3 - kc0) / h_l
+        dkt_dstrain = dkt_ds1[:, None] * ds1_dstrain + dkt_ds2[:, None] * ds2_dstrain + dkt_dl[:, None] * ddlam_dstrain
+        dkc_dstrain = dkc_ds1[:, None] * ds1_dstrain + dkc_ds2[:, None] * ds2_dstrain + dkc_dl[:, None] * ddlam_dstrain
+
+        # d(theta)/d(strain): derivada analítica de 0.5*atan2(2*sxy,sxx-syy)
+        r2 = radius**2
+        r2_safe = np.where(rot_active, r2, 1.0)
+        dtheta_dstr = np.stack(
+            [np.where(rot_active, -sxy / (4.0 * r2_safe), 0.0),
+             np.where(rot_active, sxy / (4.0 * r2_safe), 0.0),
+             np.where(rot_active, (sxx - syy) / (4.0 * r2_safe), 0.0)],
+            axis=-1,
+        )  # (n,3)
+        dtheta_dstrain = np.einsum("ni,ij->nj", dtheta_dstr, self.d0)  # (n,3)
+
+        # d(sigma_eff)/d(strain): a través de s1,s2 (ya tenemos sus
+        # sensibilidades) Y de theta (rotación fija del predictor, pero
+        # también depende de la deformación)
+        dsigxx_dtheta = -2.0 * cos_t * sin_t * (s1 - s2)
+        dsigyy_dtheta = 2.0 * sin_t * cos_t * (s1 - s2)
+        dsigxy_dtheta = (s1 - s2) * (cos_t**2 - sin_t**2)
+
+        dsigeff_dstrain = np.empty((n, 3, 3))
+        dsigeff_dstrain[:, 0, :] = (
+            cos_t[:, None] ** 2 * ds1_dstrain + sin_t[:, None] ** 2 * ds2_dstrain
+            + dsigxx_dtheta[:, None] * dtheta_dstrain
+        )
+        dsigeff_dstrain[:, 1, :] = (
+            sin_t[:, None] ** 2 * ds1_dstrain + cos_t[:, None] ** 2 * ds2_dstrain
+            + dsigyy_dtheta[:, None] * dtheta_dstrain
+        )
+        dsigeff_dstrain[:, 2, :] = (
+            (sin_t * cos_t)[:, None] * (ds1_dstrain - ds2_dstrain) + dsigxy_dtheta[:, None] * dtheta_dstrain
+        )
+
+        # d(daño)/d(strain): diferencias finitas SOLO en `_d_t`/`_d_c`
+        # (interpolación de tabla) y `_flow_and_weight` (cerrada, sin
+        # Newton), encadenadas con las sensibilidades ya analíticas de
+        # (s1,s2,kappa_t,kappa_c) obtenidas arriba.
+        #
+        # OJO con el paso de esta FD en particular: `kappa_t`/`kappa_c`
+        # son variables de endurecimiento con escala MUY distinta a la de
+        # los esfuerzos (p. ej. kappa_t puede ser ~1e-5, con espaciado de
+        # tabla del mismo orden) — un paso ligado a `fcm` (como el de
+        # `h_s` más abajo, correcto para s1/s2) salta varios segmentos de
+        # la tabla interpolada y da una derivada completamente errónea
+        # (bug real encontrado y corregido durante la validación de esta
+        # sesión, ver `tests/nl/test_concrete_cdp.py`). El paso debe ser
+        # una fracción chica del RANGO TOTAL de cada tabla, no de `fcm`.
+        h_kt = 1e-6 * max(self.kappa_t[-1], 1e-12)
+        h_kc = 1e-6 * max(self.kappa_c[-1], 1e-12)
+        ddt_dkt = (self._d_t(kt + h_kt) - d_t) / h_kt
+        ddc_dkc = (self._d_c(kc + h_kc) - d_c) / h_kc
+
+        r0 = r_weight
+        r_1 = self._flow_and_weight(s1 + h_s, s2)[3]
+        r_2 = self._flow_and_weight(s1, s2 + h_s)[3]
+        dr_ds1 = (r_1 - r0) / h_s
+        dr_ds2 = (r_2 - r0) / h_s
+        dr_dstrain = dr_ds1[:, None] * ds1_dstrain + dr_ds2[:, None] * ds2_dstrain
+
+        dst_dstrain = -self.p.w_t * dr_dstrain
+        dsc_dstrain = self.p.w_c * dr_dstrain
+        ddt_dstrain = ddt_dkt[:, None] * dkt_dstrain
+        ddc_dstrain = ddc_dkc[:, None] * dkc_dstrain
+
+        s_t = 1.0 - self.p.w_t * r_weight
+        s_c = 1.0 - self.p.w_c * (1.0 - r_weight)
+        term1 = 1.0 - s_t * d_c
+        term2 = 1.0 - s_c * d_t
+        dterm1 = -(dst_dstrain * d_c[:, None] + s_t[:, None] * ddc_dstrain)
+        dterm2 = -(dsc_dstrain * d_t[:, None] + s_c[:, None] * ddt_dstrain)
+        damage = 1.0 - term1 * term2
+        ddamage_dstrain = -(dterm1 * term2[:, None] + term1[:, None] * dterm2)
+
+        # stress_i = (1-daño)*sigma_eff_i  ->  regla del producto
+        tangent = (1.0 - damage)[:, None, None] * dsigeff_dstrain - sigma_eff[:, :, None] * ddamage_dstrain[:, None, :]
+        return tangent
 
     def damage_at(self, kappa_t, kappa_c) -> tuple[np.ndarray, np.ndarray]:
         """`(d_t, d_c)` en las variables de endurecimiento dadas — envoltorio

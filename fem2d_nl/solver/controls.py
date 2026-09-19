@@ -55,3 +55,22 @@ class LoadControl:
 
     def external_force(self, ndof: int, lam: float) -> np.ndarray:
         return lam * self.force_pattern
+
+
+@dataclass(frozen=True)
+class ArcLengthControl:
+    """Geometría del problema para `solver.arc_length.arc_length_solve`
+    (S7): apoyos y patrón de carga de referencia (igual forma que
+    `LoadControl`, ya que arc-length existe precisamente para trazar la
+    curva P-δ más allá de un pico de carga, donde el control de carga puro
+    diverge). No implementa `apply`/`external_force` — `arc_length_solve`
+    tiene su propio bucle predictor-corrector con el sistema *bordered* de
+    Crisfield, que no encaja en la interfaz `apply(u,lam)` de
+    `DisplacementControl`/`LoadControl` (ver su docstring)."""
+    fixed_dofs: np.ndarray
+    force_pattern: np.ndarray               # (ndof,) patrón de referencia (fuerza externa a lam=1)
+
+    def free_dofs(self, ndof: int) -> np.ndarray:
+        mask = np.ones(ndof, dtype=bool)
+        mask[self.fixed_dofs] = False
+        return np.nonzero(mask)[0]

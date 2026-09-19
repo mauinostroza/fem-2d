@@ -121,7 +121,14 @@ def _try_step(model, control, u_prev, states, lam, dt, options: SolverOptions):
     return u, trial_states, f_int, options.max_iterations, float("inf"), False
 
 
-def nonlinear_solve(model, control, options: SolverOptions | None = None, progress_cb=None) -> NonlinearResult:
+def nonlinear_solve(
+    model,
+    control,
+    options: SolverOptions | None = None,
+    progress_cb=None,
+    u_start: np.ndarray | None = None,
+    states_start: list | None = None,
+) -> NonlinearResult:
     """Resuelve el modelo con pasos de carga/desplazamiento crecientes de
     0 a 1, con cutback (bisección del incremento) ante no convergencia.
 
@@ -129,11 +136,22 @@ def nonlinear_solve(model, control, options: SolverOptions | None = None, progre
     devuelve `NonlinearResult(converged=False, ...)` conservando todos los
     pasos previos ya convergidos: un fallo en ablandamiento es información
     física válida, no debe descartar resultados previos.
+
+    `u_start`/`states_start` (S7): punto de partida opcional en vez de
+    cero — permite encadenar resoluciones (p. ej. la búsqueda anidada de
+    `y_na` en `postprocess.moment_curvature_pure_bending`, que resuelve un
+    único incremento repetidas veces desde el último paso convergido, en
+    vez de rehacer toda la historia de carga desde cero en cada intento).
+    `control.apply(u, lam)` sigue fijando los dofs prescritos/fijos a su
+    valor absoluto en `lam`; solo los dofs libres heredan `u_start` como
+    punto de partida de Newton (un buen "warm start", no una condición de
+    borde). Por defecto (`None`) el comportamiento es idéntico al de
+    antes de S7: arranca en cero y en el estado inicial del material.
     """
     options = options or SolverOptions()
     ndof = model.ndof
-    u = np.zeros(ndof)
-    states = model.initial_state()
+    u = u_start.copy() if u_start is not None else np.zeros(ndof)
+    states = states_start if states_start is not None else model.initial_state()
     result = NonlinearResult()
 
     lam = 0.0
